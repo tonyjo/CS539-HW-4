@@ -4,12 +4,13 @@ import torch
 import torch.distributions as distributions
 from daphne import daphne
 # funcprimitives
-from evaluation_based_sampling import evaluate_program
 from tests import is_tol, run_prob_test,load_truth
 # Useful functions
 from primitives import _hashmap, _vector, _totensor
 from primitives import _put, _remove, _append, _get
 from primitives import _squareroot, _mat_repmat, _mat_transpose
+# Dist
+from distributions import Normal, Bernoulli, Categorical, Dirichlet, Gamma
 
 # OPS
 basic_ops = {'+':torch.add,
@@ -646,20 +647,73 @@ def eval(e, sig, l):
     return [None, sig]
 
 
+## Black Box Variational Inference
 def optimizer_step(q, g_):
-    pass
+    for v in g_.keys():
+        lambda_v  = Q[v].Parameters()
+        lambda_v_ = lambda_v + SGD
+        Q[v].Parameters()
+
+    return Q_
+
 
 def elbo_gradients(G_1toL , logW_1toL):
-    pass
+    G_all = []
+    for i in range(G_1toL):
+        G_all.extend(G_1toL[i])
 
-def BBVI(S, L):
-    pass
+    F  = {}
+    g_ = {}
+    for v in G_all:
+        for l in range(len(G_1toL)):
+            if v in G_1toL[l].keys():
+                if l in F.keys():
+                    F[l][v] = G_1toL[v] * logW_1toL
+                else:
+                    F[l] = {}
+                    F[l][v] = 0.0
+                    G_1toL[v] = 0.0
+        b_  = sum(covar(), G_1toL[v])/sum()
+        g_v = sum()
+
+    return g_
+
+
+def BBVI(S, L, T):
+    sigma = {}
+    sigma["logW"] = 0.0
+    sigma["g"] = []
+    sigma["G"] = []
+    outputs = []
+    for t in range(T):
+        r_tl = []
+        logW_tl = []
+        for l in range(L):
+            r_tl, sigma_tl = eval(e, sig, l)
+            G_tl.append(sigma_tl["G"])
+            logW_tl.append(sigma_tl["logW"])
+        g_ = elbo_gradients(G_1toL=G_tl , logW_1toL=logW_tl)
+        sigma[Q] = optimizer_step(q=sigma[Q], g_=g_)
+        # Collect
+        outputs.append([r_tl, logW_tl[L-1]])
+
+    return outputs
 
 
 if __name__ == '__main__':
-    ## how to use this,
-    # Given some input tensors that don't necessarily have gradients enables
-    scale = torch.tensor(1.)
-    loc = torch.tensor(0.)
+    # Change the path
+    program_path = '/home/tonyjo/Documents/prob-prog/CS539-HW-4'
 
-    # and s
+    for i in range(5,6):
+        ## Note: this path should be with respect to the daphne path!
+        # ast = daphne(['graph', '-i', f'{program_path}/src/programs/{i}.daphne'])
+        # ast_path = f'./jsons/graphs/final/{i}.json'
+        # with open(ast_path, 'w') as fout:
+        #     json.dump(ast, fout, indent=2)
+        # print('\n\n\nSample of prior of program {}:'.format(i))
+
+        if i == 1:
+            print('Running evaluation-based-sampling for Task number {}:'.format(str(i)))
+            ast_path = f'./jsons/HW3/eval/{i}.json'
+            with open(ast_path) as json_file:
+                ast = json.load(json_file)
