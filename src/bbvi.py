@@ -161,7 +161,7 @@ def eval_vertex(node, sig={}, l={}, Y={}, P={}):
 # Global vars
 global rho
 rho = {}
-DEBUG = True # Set to true to see intermediate outputs for debugging purposes
+DEBUG = False # Set to true to see intermediate outputs for debugging purposes
 def eval_graph(graph, sigma={}, l={}):
     """
     This function does ancestral sampling starting from the prior.
@@ -419,11 +419,9 @@ def optimizer_step(g_, Q, lr=0.001):
         if DEBUG:
             print("old_params: ", old_params)
             print("grad_Lv: ", grad_Lv)
-
         new_lambda_v_params = old_params + (lr * grad_Lv)
         if DEBUG:
             print("New Q Params: ", new_lambda_v_params)
-
         # Update
         Q[v] = Q[v].Set_Parameters(new_lambda_v_params)
 
@@ -469,40 +467,52 @@ def elbo_gradients(G_1toL , logW_1toL, Q, L):
             except:
                 g1L = G_1toL[l][v]
             G1L.append(g1L)
-        Flv = np.array(Flv).flatten()
-        G1L = np.array(G1L).flatten()
+        Flv = np.array(Flv)
+        if len(Flv.shape) < 2:
+            Flv = np.expand_dims(Flv, axis=1)
+        G1L = np.array(G1L)
+        if len(G1L.shape) < 2:
+            G1L = np.expand_dims(G1L, axis=1)
 
         if DEBUG:
-            print("Flv: ", Flv)
-            print("G1L: ", G1L)
+            print("Flv: \n", Flv)
+            print("G1L: \n", G1L)
+            print("Conv: \n", np.cov(Flv.T, G1L.T))
+            print('Sum_GIL: ', np.sum(G1L))
             print('\n')
 
-        b_ = np.sum(np.cov(Flv, G1L))/np.sum(G1L)
+        b_ = np.sum(np.cov(Flv.T, G1L.T))/np.sum(G1L)
         g_[v] = np.sum(Flv - (b_ * G1L))/L
 
     return g_
 
-
 def BBVI(graph, Q, S, L, T):
     outputs = []
+    sigma = {}
+    sigma["logW"] = 0.0
+    sigma["q"] = {}
+    sigma["G"] = {}
+    sigma["Q"] = {**Q}
+
     for t in range(T):
-        sigma = {}
-        sigma["logW"] = 0.0
-        sigma["q"] = {}
-        sigma["G"] = {}
-        sigma["Q"] = {**Q}
         G_tL = []
         logW_tL = []
         for l in range(L):
-            r_tl, sigma_ = eval_graph(graph=graph, sigma=sigma, l={})
-            G_tL.append(sigma_["G"])
-            logW_tL.append(sigma_["logW"])
+            r_tl, sigma_tl = eval_graph(graph=graph, sigma={**sigma}, l={})
+            G_tL.append(sigma_tl["G"])
+            logW_tL.append(sigma_tl["logW"])
         # import pdb; pdb.set_trace()
-        g_ = elbo_gradients(G_1toL=G_tL, logW_1toL=logW_tL, Q=Q, L=L)
-        Q = optimizer_step(g_=g_, Q=Q)
-        print(Q)
+        # print(G_tL)
+        # print(logW_tL)
+        # auto_elbo_gradients(G_1toL=G_tL, logW_1toL=logW_tL, Q=Q, L=L)
+        g_ = elbo_gradients(G_1toL=G_tL, logW_1toL=logW_tL, Q={**Q}, L=L)
+        Q  = optimizer_step(g_=g_, Q={**Q})
         # Collect
         outputs.append([r_tl, logW_tL[L-1]])
+        # Display
+        if t%10 == 0:
+            print(f'Completion: {t}/{T}')
+    print(f'Completion: {T}/{T}')
 
     return outputs
 
@@ -541,13 +551,11 @@ if __name__ == '__main__':
 
             Q = {}
             loc   = torch.tensor(0.)
-            scale = torch.tensor(1.)
+            scale = torch.tensor(10.)
 
             for v in V:
                 Q[v] = Normal(loc, scale)
 
-            print(Q)
-
             # Setup up
             # Print
-            outputs = BBVI(graph=graph, Q=Q, S=1, L=5, T=10)
+            outputs = BBVI(graph=graph, Q=Q, S=1, L=5, T=100)
