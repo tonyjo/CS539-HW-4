@@ -19,7 +19,8 @@ basic_ops = {'+':torch.add,
              '/':torch.div
 }
 
-math_ops = {'sqrt': lambda x: _squareroot(x)
+math_ops = {'sqrt': lambda x: _squareroot(x),
+            'abs': lambda x: torch.abs(x)
 }
 
 data_struct_ops = {'vector': lambda x: _vector(x),
@@ -40,6 +41,7 @@ dist_ops = {"normal":lambda mu, scale: distributions.normal.Normal(loc=mu, scale
             "beta":lambda a, b: distributions.beta.Beta(concentration1=a, concentration0=b),
             "gamma": lambda concentration, rate: distributions.gamma.Gamma(concentration=concentration, rate=rate),
             "uniform": lambda low, high: distributions.uniform.Uniform(low=low, high=high),
+            "uniform-continuous": lambda low, high: distributions.uniform.Uniform(low=low, high=high),
             "exponential":lambda rate: distributions.exponential.Exponential(rate=rate),
             "discrete": lambda probs: distributions.categorical.Categorical(probs=probs),
             "dirichlet": lambda concentration: distributions.dirichlet.Dirichlet(concentration=concentration),
@@ -250,6 +252,11 @@ def evaluate_program(e, sig, l):
             # Math ops
             elif root in math_ops.keys():
                 op_func = math_ops[root]
+                # Initial MAT
+                if isinstance(tail, list) and len(tail) == 1:
+                    tail, sig = evaluate_program(tail, sig=sig, l=l)
+                elif isinstance(tail, list):
+                    tail, sig = evaluate_program([tail], sig=sig, l=l)
                 op_eval = op_func(tail)
                 return [op_eval, sig]
 

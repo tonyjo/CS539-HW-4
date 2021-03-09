@@ -2,6 +2,7 @@ import json
 import math
 import copy
 import numpy as np
+import seaborn as sns
 import matplotlib.pyplot as plt
 import torch
 import torch.distributions as distributions
@@ -26,6 +27,7 @@ basic_ops = {'+':torch.add,
 one_ops = {'sqrt': lambda x: _squareroot(x),
            'vector': lambda x: _vector(x),
            'hash-map': lambda x: _hashmap(x),
+           'abs': lambda x: torch.abs(x),
            'first': lambda x: x[0],
            'second': lambda x: x[1],
            'last': lambda x: x[-1],
@@ -54,6 +56,7 @@ dist_ops = {"normal":lambda mu, sig: distributions.normal.Normal(loc=mu, scale=s
             "beta":lambda a, b: distributions.beta.Beta(concentration1=a, concentration0=b),
             "gamma": lambda concentration, rate: distributions.gamma.Gamma(concentration=concentration, rate=rate),
             "uniform": lambda low, high: distributions.uniform.Uniform(low=low, high=high),
+            "uniform-continuous": lambda low, high: distributions.uniform.Uniform(low=low, high=high),
             "exponential":lambda rate: distributions.exponential.Exponential(rate=rate),
             "discrete": lambda probs: distributions.categorical.Categorical(probs=probs),
             "dirichlet": lambda concentration: distributions.dirichlet.Dirichlet(concentration=concentration),
@@ -91,7 +94,7 @@ def eval_vertex(node, sig={}, l={}, Y={}, P={}):
         sample_eval = ["sample", tail]
         if DEBUG:
             print('Sample AST: ', sample_eval)
-        sampler, sig = evaluate_program(e=[sample_eval], sig=sig, l=l)
+        sampler, sig = evaluate_program(e=[sample_eval], sig={**sig}, l={**l})
         try:
             p = sampler.sample()
         except:
@@ -138,7 +141,7 @@ def eval_vertex(node, sig={}, l={}, Y={}, P={}):
             sample_eval = ["observe", tail]
         if DEBUG:
             print('Sample AST: ', sample_eval)
-        c, sig = evaluate_program(e=[sample_eval], sig=sig, l=l)
+        c, sig = evaluate_program(e=[sample_eval], sig={**sig}, l={**l})
 
     else:
         raise AssertionError('Unsupported operation!')
@@ -164,7 +167,7 @@ rho = {}
 DEBUG = False # Set to true to see intermediate outputs for debugging purposes
 def eval_graph(graph, sigma={}, l={}):
     """
-    This function does ancestral sampling starting from the prior.
+    This function evaluate the graph.
     Args:
         graph: json Graph of FOPPL program
     """
@@ -249,7 +252,6 @@ def eval_graph(graph, sigma={}, l={}):
 
     if DEBUG:
         print('All Local vars: ', l)
-        print('All Sigma vars: ', all_sigma)
         print('All Sigma vars: ', all_sigma)
         print('\n')
 
@@ -409,28 +411,27 @@ def eval_graph(graph, sigma={}, l={}):
 
 
 ## Black Box Variational Inference
-def optimizer_step(g_, Q, lr=0.001):
+def optimizer_step(g_, Q, lr=0.0001):
     for v in g_.keys():
         q_v = Q[v]
-        # now you can make a copy, that has gradients enabled
-        # lambda_v  = q_v.make_copy_with_grads()
         old_params = q_v.Parameters()
         grad_Lv = g_[v]
         if DEBUG:
             print("old_params: ", old_params)
             print("grad_Lv: ", grad_Lv)
-        new_lambda_v_params = old_params + (lr * grad_Lv)
-        for idx in range(len(new_lambda_v_params)):
-            new_lambda_v_params[idx] = new_lambda_v_params[idx].detach().clone()
+        # SGD
+        new_params = old_params + (lr * grad_Lv)
+        for idx in range(len(new_params)):
+            new_params[idx] = new_params[idx].detach().clone()
         if DEBUG:
-            print("New Q Params: ", new_lambda_v_params)
+            print("New Q Params: ", new_params)
         # Update
-        Q[v] = Q[v].Set_Parameters(new_lambda_v_params)
+        Q[v] = Q[v].Set_Parameters(new_params)
 
     return Q
 
 
-def elbo_gradients(G_1toL , logW_1toL, Q, L):
+def elbo_gradients(G_1toL , logW_1toL, Q, L, eps=0.00001):
     G_all = []
     for i in range(L):
         G_all.extend(G_1toL[i])
@@ -483,37 +484,42 @@ def elbo_gradients(G_1toL , logW_1toL, Q, L):
             print('Sum_GIL: ', np.sum(G1L))
             print('\n')
 
-        b_ = np.sum(np.cov(Flv.T, G1L.T))/np.sum(np.var(G1L))
+        dm = np.sum(np.var(G1L))
+        if dm < eps:
+            dm = eps
+        b_ = np.sum(np.cov(Flv.T, G1L.T))/dm
         g_[v] = np.sum(Flv - (b_ * G1L))/L
 
     return g_
 
-def BBVI(graph, Q, S, L, T):
-    outputs = []
+def BBVI(graph, Q, S, L, T, display_T=10):
     sigma = {}
     sigma["logW"] = 0.0
     sigma["q"] = {}
     sigma["G"] = {}
     sigma["Q"] = {**Q}
 
+    outputs = []
     for t in range(T):
+        R_tL = []
         G_tL = []
         logW_tL = []
         for l in range(L):
             r_tl, sigma_tl = eval_graph(graph=graph, sigma={**sigma}, l={})
             G_tL.append(sigma_tl["G"])
             logW_tL.append(sigma_tl["logW"])
+            R_tL.append([r_tl, sigma_tl["logW"]])
         # import pdb; pdb.set_trace()
         # print(G_tL)
         # print(logW_tL)
         # auto_elbo_gradients(G_1toL=G_tL, logW_1toL=logW_tL, Q=Q, L=L)
         g_ = elbo_gradients(G_1toL=G_tL, logW_1toL=logW_tL, Q={**Q}, L=L)
-        Q  = optimizer_step(g_=g_, Q={**Q})
+        Q  = optimizer_step(g_=g_, Q=Q)
         # print(Q)
         # Collect
-        outputs.append([r_tl, logW_tL[L-1]])
+        outputs.extend(R_tL)
         # Display
-        if t%10 == 0:
+        if t%display_T == 0:
             print(f'Completion: {t}/{T}')
     print(f'Completion: {T}/{T}')
 
@@ -524,7 +530,8 @@ if __name__ == '__main__':
     # Change the path
     program_path = '/home/tonyjo/Documents/prob-prog/CS539-HW-4'
 
-    for i in range(1,6):
+    for i in range(1,2):
+    #for i in range(1,6):
         ## Note: this path should be with respect to the daphne path!
         # ast = daphne(['graph', '-i', f'{program_path}/src/programs/{i}.daphne'])
         # ast_path = f'./jsons/graphs/final/{i}.json'
@@ -540,34 +547,338 @@ if __name__ == '__main__':
         # print('\n\n\nSample of posterior of program {}:'.format(i))
 
         if i == 1:
-            print('Running evaluation-based-sampling for Task number {}:'.format(str(i)))
-            ast_path = f'./jsons/eval/final/{i}.json'
-            with open(ast_path) as json_file:
-                ast = json.load(json_file)
-
+            print('Running graph-based-sampling for Task number {}:'.format(str(i)))
             graph_path = f'./jsons/graphs/final/{i}.json'
             with open(graph_path) as json_file:
                 graph = json.load(json_file)
 
-            V = graph[1]["V"]
-
+            # Setup proposal -- same as the prior distribution
             Q = {}
-            loc   = torch.tensor(0.)
-            scale = torch.tensor(2.25)
-
+            loc   = torch.tensor([0.])
+            scale = torch.tensor([math.sqrt(5)])
+            V = graph[1]["V"]
             for v in V:
                 Q[v] = Normal(loc, scale)
 
             # Setup up
             # Print
-            T = 100
-            L = 2
-            outputs = BBVI(graph=graph, Q=Q, S=1, L=L, T=T)
+            T  = 100
+            L  = 10
+            DT = 10
+            outputs = BBVI(graph=graph, Q=Q, S=1, L=L, T=T, display_T=DT)
 
             # Mean:
-            mu_expected = 0.0
-            for out in outputs:
-                mu_expected += out[0]
-            mu_expected = mu_expected/T
+            W_k = 0.0
+            for k in range(T):
+                r_l, W_l = outputs[k]
+                W_l = W_l.item()
+                W_k += math.exp(W_l)
 
-            print(mu_expected)
+            EX = 0.0
+            for l in range(T):
+                r_l, W_l = outputs[l]
+                r_l = r_l.item()
+                W_l = W_l.item()
+                W_l = math.exp(W_l)
+                EX += ((W_l/W_k) * r_l)
+            print("Posterior Mean: ", EX)
+            print("--------------------------------")
+            print("\n")
+
+            EX2 = 0.0
+            for l in range(T):
+                r_l, W_l = outputs[l]
+                r_l = r_l.item()
+                W_l = W_l.item()
+                W_l = math.exp(W_l)
+                EX2 += ((W_l/W_k) * (r_l**2))
+            var = EX2 - (EX**2)
+            print("Posterior Variance:", var)
+            print("--------------------------------")
+            print("\n")
+
+            plt.hist([r[0].item() for r in outputs])
+            plt.savefig('plots/1.png')
+            plt.clf()
+
+            jp = []
+            for r in range(0, len(outputs), L):
+                joint_log_prob = 0.0
+                for l in range(L):
+                    x1 = outputs[r+l]
+                    if isinstance(x1, list):
+                        x1 = x1[0]
+                    try:
+                        joint_log_prob += x1
+                    except:
+                        joint_log_prob += x1[0]
+                jp.append(joint_log_prob)
+
+            plt.plot(jp)
+            plt.savefig('plots/1_1.png')
+            plt.clf()
+        #-----------------------------------------------------------------------
+        elif i == 2:
+            print('Running graph-based-sampling for Task number {}:'.format(str(i)))
+            graph_path = f'./jsons/graphs/final/{i}.json'
+            with open(graph_path) as json_file:
+                graph = json.load(json_file)
+
+            # Setup proposal -- same as the prior distribution
+            Q = {}
+            loc   = torch.tensor([0.])
+            scale = torch.tensor([1.])
+            V = graph[1]["V"]
+            for v in V:
+                if v in 'sample1':
+                    loc_1   = torch.tensor([0.])
+                    scale_1 = torch.tensor([10.])
+                    Q[v] = Normal(loc_1, scale_1)
+                elif v in 'sample2':
+                    loc_2   = torch.tensor([0.])
+                    scale_2 = torch.tensor([10.])
+                    Q[v] = Normal(loc_2, scale_2)
+                else:
+                    Q[v] = Normal(loc, scale)
+
+            # Setup up
+            # Print
+            T  = 10
+            L  = 2
+            DT = 100
+            all_output = BBVI(graph=graph, Q=Q, S=1, L=L, T=T, display_T=DT)
+
+            W_k = 0.0
+            for k in range(T):
+                r_l, W_l = all_output[k]
+                W_l = W_l.item()
+                W_k += math.exp(W_l)
+
+            EX_slope = 0.0
+            EX_bias = 0.0
+            for l in range(T):
+                r_l, W_l = all_output[l]
+                W_l = W_l.item()
+                W_l = math.exp(W_l)
+                EX_slope += ((W_l/W_k) * r_l[0].item())
+                EX_bias  += ((W_l/W_k) * r_l[1].item())
+            print("Posterior Bias  Mean: ", EX_bias)
+            print("Posterior Slope Mean: ", EX_slope)
+            print("--------------------------------")
+            print("\n")
+
+            EX2_ = []
+            for l in range(T):
+                r_l, W_l = all_output[l]
+                W_l = W_l.item()
+                W_l = math.exp(W_l)
+                EX2_.extend([(W_l/W_k) * r_l[0].item() * r_l[1].item()])
+            covar = sum(EX2_) - (EX_slope * EX_bias)
+            print("Posterior Covariance : ", covar)
+            print("---------------------------------")
+            print("\n")
+        #-----------------------------------------------------------------------
+        elif i == 3:
+            print('Running graph-based-sampling for Task number {}:'.format(str(i)))
+            graph_path = f'./jsons/graphs/final/{i}.json'
+            with open(graph_path) as json_file:
+                graph = json.load(json_file)
+
+            # Setup proposal -- same as the prior distribution
+            Q = {}
+            V = graph[1]["V"]
+            P = graph[1]["P"]
+            d_ops = {"normal":lambda mu, sig: Normal(loc=mu, scale=sig),
+                     "bernoulli": lambda probs: Bernoulli(probs=probs),
+                     "categorical": lambda probs: Categorical(probs=probs),
+                     "discrete": lambda probs: Categorical(probs=probs),
+                     "dirichlet": lambda concentration: Dirichlet(concentration=concentration),
+                     "gamma": lambda concentration, rate: Gamma(concentration=concentration, rate=rate)
+            }
+            peval = d_ops["dirichlet"]
+            probs = torch.tensor([1.0, 1.0, 1.0])
+            Q["sample6"] = peval(probs)
+            loc   = torch.tensor([0.])
+            scale = torch.tensor([1.])
+            for v in V:
+                if ("sample" in v) and (v != "sample6"):
+                    try:
+                        p = P[v][1]
+                        a, b, c = p
+                        b = torch.tensor([b], dtype=torch.float32)
+                        c = torch.tensor([c], dtype=torch.float32)
+                        peval = d_ops[a]
+                        Q[v]  = peval(b, c)
+                    except:
+                        a, b = p
+                        b = Q["sample6"].sample()
+                        peval = d_ops[a]
+                        Q[v]  = peval(b)
+                else:
+                    Q[v] = Normal(loc, scale)
+
+            # Setup up
+            # Print
+            T  = 100
+            L  = 5
+            DT = 100
+            all_output = BBVI(graph=graph, Q=Q, S=1, L=L, T=T, display_T=DT)
+
+            EX = 0.0
+            for l in range(T):
+                r_l, W_l = all_output[l]
+                r_l = float(r_l)
+                EX += r_l
+            print("Posterior Mean: ", EX/T)
+            print("--------------------------------")
+            print("\n")
+
+            EX2 = 0.0
+            for l in range(T):
+                r_l, W_l = all_output[l]
+                r_l = float(r_l)
+                EX2 += (float(r_l)**2)
+            EX2 = EX2/T
+            var = EX2 - (EX**2)
+            print("Posterior Variance:", var)
+            print("--------------------------------")
+            print("\n")
+        #-----------------------------------------------------------------------
+        elif i == 4:
+            print('Running graph-based-sampling for Task number {}:'.format(str(i)))
+            graph_path = f'./jsons/graphs/final/{i}.json'
+            with open(graph_path) as json_file:
+                graph = json.load(json_file)
+
+            # Setup proposal -- same as the prior distribution
+            Q = {}
+            V = graph[1]["V"]
+            P = graph[1]["P"]
+            d_ops = {"normal":lambda mu, sig: Normal(loc=mu, scale=sig),
+                     "bernoulli": lambda probs: Bernoulli(probs=probs),
+                     "categorical": lambda probs: Categorical(probs=probs),
+                     "discrete": lambda probs: Categorical(probs=probs),
+                     "dirichlet": lambda concentration: Dirichlet(concentration=concentration),
+                     "gamma": lambda concentration, rate: Gamma(concentration=concentration, rate=rate)
+            }
+            loc   = torch.tensor([0.])
+            scale = torch.tensor([1.])
+            for v in V:
+                if ("sample" in v):
+                    p = P[v][1]
+                    a, b, c = p
+                    b = torch.tensor([b], dtype=torch.float32)
+                    c = torch.tensor([c], dtype=torch.float32)
+                    peval = d_ops[a]
+                    Q[v]  = peval(b, c)
+                else:
+                    Q[v] = Normal(loc, scale)
+
+            # Setup up
+            # Print
+            T  = 2
+            L  = 2
+            DT = 100
+            all_output = BBVI(graph=graph, Q=Q, S=1, L=L, T=T, display_T=DT)
+
+            samples = []
+            for l in range(T):
+                r_l, W_l = all_output[l]
+                W_0 = r_l[0:10]
+                b_0 = r_l[10:20]
+                W_1 = r_l[20:120]
+                b_1 = r_l[120:]
+                samples.append([W_0, b_0, W_1, b_1])
+
+            # Plotting obtained from https://github.com/truebluejason/prob_prog_project/blob/master/evaluation_based_sampling.py
+            fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(8,2))
+            mean1 = [np.mean([s[0].flatten()[j] for s in samples]) for j in range(len(samples[0][0].flatten()))]
+            var1  = [np.var([s[0].flatten()[j] for s in samples]) for j in range(len(samples[0][0].flatten()))]
+            sns.heatmap(np.array(mean1).reshape(2,5),ax=ax1,annot=True,fmt="0.3f")
+            sns.heatmap(np.array(var1).reshape(2,5),ax=ax2,annot=True,fmt="0.3f")
+            ax1.set_title('Marginal Mean')
+            ax2.set_title('Marginal Variance')
+            plt.tight_layout()
+            plt.savefig(f'plots/p41.png')
+            fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(8,2))
+            mean2 = [np.mean([s[1].flatten()[j] for s in samples]) for j in range(len(samples[0][1].flatten()))]
+            var2  = [np.var([s[1].flatten()[j] for s in samples]) for j in range(len(samples[0][1].flatten()))]
+            sns.heatmap(np.array(mean2).reshape(2,5),ax=ax1,annot=True,fmt="0.3f")
+            sns.heatmap(np.array(var2).reshape(2,5),ax=ax2,annot=True,fmt="0.3f")
+            ax1.set_title('Marginal Mean')
+            ax2.set_title('Marginal Variance')
+            plt.tight_layout()
+            plt.savefig(f'plots/p42.png')
+            fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(16,7))
+            mean3 = [np.mean([s[2].flatten()[j] for s in samples]) for j in range(len(samples[0][2].flatten()))]
+            var3  = [np.var([s[2].flatten()[j] for s in samples]) for j in range(len(samples[0][2].flatten()))]
+            sns.heatmap(np.array(mean3).reshape(10,10),ax=ax1,annot=True,fmt="0.3f")
+            sns.heatmap(np.array(var3).reshape(10,10),ax=ax2,annot=True,fmt="0.3f")
+            ax1.set_title('Marginal Mean')
+            ax2.set_title('Marginal Variance')
+            plt.tight_layout()
+            plt.savefig(f'plots/p43.png')
+            fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(8,2))
+            mean4 = [np.mean([s[3].flatten()[j] for s in samples]) for j in range(len(samples[0][3].flatten()))]
+            var4  = [np.var([s[3].flatten()[j] for s in samples]) for j in range(len(samples[0][3].flatten()))]
+            sns.heatmap(np.array(mean4).reshape(2,5),ax=ax1,annot=True,fmt="0.3f")
+            sns.heatmap(np.array(var4).reshape(2,5),ax=ax2,annot=True,fmt="0.3f")
+            ax1.set_title('Marginal Mean')
+            ax2.set_title('Marginal Variance')
+            plt.tight_layout()
+            plt.savefig(f'plots/p44.png')
+        #-----------------------------------------------------------------------
+        elif i == 5:
+            print('Running graph-based-sampling for Task number {}:'.format(str(i)))
+            graph_path = f'./jsons/graphs/final/{i}.json'
+            with open(graph_path) as json_file:
+                graph = json.load(json_file)
+
+            # Setup proposal -- same as the prior distribution
+            Q = {}
+            loc   = torch.tensor([0.0])
+            scale = torch.tensor([1.0])
+            V = graph[1]["V"]
+            for v in V:
+                Q[v] = Normal(loc, scale)
+
+            # Setup up
+            # Print
+            T  = 100
+            L  = 2
+            DT = 100
+            outputs = BBVI(graph=graph, Q=Q, S=1, L=L, T=T, display_T=DT)
+
+            # Mean:
+            W_k = 0.0
+            for k in range(T):
+                r_l, W_l = outputs[k]
+                W_l = W_l.item()
+                W_k += math.exp(W_l)
+
+            EX = 0.0
+            for l in range(T):
+                r_l, W_l = outputs[l]
+                r_l = r_l.item()
+                W_l = W_l.item()
+                W_l = math.exp(W_l)
+                EX += ((W_l/W_k) * r_l)
+            print("Posterior Mean: ", EX)
+            print("--------------------------------")
+            print("\n")
+
+            EX2 = 0.0
+            for l in range(T):
+                r_l, W_l = outputs[l]
+                r_l = r_l.item()
+                W_l = W_l.item()
+                W_l = math.exp(W_l)
+                EX2 += ((W_l/W_k) * (r_l**2))
+            var = EX2 - (EX**2)
+            print("Posterior Variance:", var)
+            print("--------------------------------")
+            print("\n")
+
+            plt.hist([r[0].item() for r in outputs])
+            plt.savefig('plots/5.png')
+        #-----------------------------------------------------------------------

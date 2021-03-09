@@ -62,7 +62,7 @@ class Bernoulli(dist.Bernoulli):
         return Bernoulli(logits = logits)
 
     def Set_Parameters(self, ps):
-        logits = [p.clone().detach().requires_grad_() for p in ps]
+        logits = [p.clone().detach().requires_grad_() for p in ps][0]
 
         return Bernoulli(logits=logits)
 
@@ -103,7 +103,7 @@ class Categorical(dist.Categorical):
         return Categorical(logits = logits)
 
     def Set_Parameters(self, ps):
-        logits = [p.clone().detach().requires_grad_() for p in ps]
+        logits = [p.clone().detach().requires_grad_() for p in ps][0]
 
         return Categorical(logits=logits)
 
@@ -128,9 +128,9 @@ class Dirichlet(dist.Dirichlet):
         return Dirichlet(concentration)
 
     def Set_Parameters(self, ps):
-        logits = [p.clone().detach().requires_grad_() for p in ps]
+        concentration = [p.clone().detach().requires_grad_() for p in ps][0]
 
-        return Categorical(logits=logits)
+        return Categorical(logits=concentration)
 
 class Gamma(dist.Gamma):
 
@@ -163,7 +163,7 @@ class Gamma(dist.Gamma):
         return super().log_prob(x)
 
     def Set_Parameters(self, ps):
-        concentration,rate = [p.clone().detach().requires_grad_() for p in ps]
+        concentration, rate = [p.clone().detach().requires_grad_() for p in ps]
 
         return Gamma(concentration, rate)
 
