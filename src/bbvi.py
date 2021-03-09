@@ -377,7 +377,7 @@ def eval_graph(graph, sigma={}, l={}):
                 acc_logW += sigma_["logW"]
                 final_sigma = {**final_sigma, **sigma_}
                 # Collect
-                eval_outputs.append([output])
+                eval_outputs.append([output_])
             if DEBUG:
                 print('For eval: ', eval_outputs)
             # Evaluate expression
@@ -420,6 +420,8 @@ def optimizer_step(g_, Q, lr=0.001):
             print("old_params: ", old_params)
             print("grad_Lv: ", grad_Lv)
         new_lambda_v_params = old_params + (lr * grad_Lv)
+        for idx in range(len(new_lambda_v_params)):
+            new_lambda_v_params[idx] = new_lambda_v_params[idx].detach().clone()
         if DEBUG:
             print("New Q Params: ", new_lambda_v_params)
         # Update
@@ -481,7 +483,7 @@ def elbo_gradients(G_1toL , logW_1toL, Q, L):
             print('Sum_GIL: ', np.sum(G1L))
             print('\n')
 
-        b_ = np.sum(np.cov(Flv.T, G1L.T))/np.sum(G1L)
+        b_ = np.sum(np.cov(Flv.T, G1L.T))/np.sum(np.var(G1L))
         g_[v] = np.sum(Flv - (b_ * G1L))/L
 
     return g_
@@ -507,6 +509,7 @@ def BBVI(graph, Q, S, L, T):
         # auto_elbo_gradients(G_1toL=G_tL, logW_1toL=logW_tL, Q=Q, L=L)
         g_ = elbo_gradients(G_1toL=G_tL, logW_1toL=logW_tL, Q={**Q}, L=L)
         Q  = optimizer_step(g_=g_, Q={**Q})
+        # print(Q)
         # Collect
         outputs.append([r_tl, logW_tL[L-1]])
         # Display
@@ -547,15 +550,24 @@ if __name__ == '__main__':
                 graph = json.load(json_file)
 
             V = graph[1]["V"]
-            print(V)
 
             Q = {}
             loc   = torch.tensor(0.)
-            scale = torch.tensor(10.)
+            scale = torch.tensor(2.25)
 
             for v in V:
                 Q[v] = Normal(loc, scale)
 
             # Setup up
             # Print
-            outputs = BBVI(graph=graph, Q=Q, S=1, L=5, T=100)
+            T = 100
+            L = 2
+            outputs = BBVI(graph=graph, Q=Q, S=1, L=L, T=T)
+
+            # Mean:
+            mu_expected = 0.0
+            for out in outputs:
+                mu_expected += out[0]
+            mu_expected = mu_expected/T
+
+            print(mu_expected)
