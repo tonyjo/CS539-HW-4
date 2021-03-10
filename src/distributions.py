@@ -3,26 +3,30 @@ import torch.distributions as dist
 
 class Normal(dist.Normal):
 
-    def __init__(self, loc, scale):
-        if scale > 20.0:
-            self.optim_scale = scale.clone().detach().requires_grad_()
-        else:
-            self.optim_scale = torch.log(torch.exp(scale) - 1).clone().detach().requires_grad_()
+    def __init__(self, loc, scale, init=True):
+        if init:
+            if scale > 20.0:
+                self.optim_scale = scale.clone().detach().requires_grad_()
+            else:
+                self.optim_scale = torch.log(torch.exp(scale) - 1).clone().detach().requires_grad_()
 
-        super().__init__(loc, torch.nn.functional.softplus(self.optim_scale))
+                super().__init__(loc, torch.nn.functional.softplus(self.optim_scale))
+        else:
+            self.optim_scale = scale
+            super().__init__(loc, torch.nn.functional.softplus(self.optim_scale))
 
     def Parameters(self):
         """Return a list of parameters for the distribution"""
         return [self.loc, self.optim_scale]
 
-    def make_copy_with_grads(self):
+    def make_copy_with_grads(self, init=True):
         """
         Return a copy  of the distribution, with parameters that require_grad
         """
 
         ps = [p.clone().detach().requires_grad_() for p in self.Parameters()]
 
-        return Normal(*ps)
+        return Normal(loc=ps[0], scale=ps[1], init=init)
 
     def log_prob(self, x):
 
@@ -33,12 +37,12 @@ class Normal(dist.Normal):
     def Set_Parameters(self, ps):
         ps_ = [p.clone().detach().requires_grad_() for p in ps]
 
-        return Normal(*ps_)
+        return Normal(loc=ps_[0], scale=ps_[1], init=False)
 
 
 class Bernoulli(dist.Bernoulli):
 
-    def __init__(self, probs=None, logits=None):
+    def __init__(self, probs=None, logits=None, init=True):
         if logits is None and probs is None:
             raise ValueError('set probs or logits')
         elif logits is None:
@@ -52,7 +56,7 @@ class Bernoulli(dist.Bernoulli):
         """Return a list of parameters for the distribution"""
         return [self.logits]
 
-    def make_copy_with_grads(self):
+    def make_copy_with_grads(self, init=True):
         """
         Return a copy  of the distribution, with parameters that require_grad
         """
@@ -61,7 +65,7 @@ class Bernoulli(dist.Bernoulli):
 
         return Bernoulli(logits = logits)
 
-    def Set_Parameters(self, ps):
+    def Set_Parameters(self, ps, init=True):
         logits = [p.clone().detach().requires_grad_() for p in ps][0]
 
         return Bernoulli(logits=logits)
@@ -69,7 +73,7 @@ class Bernoulli(dist.Bernoulli):
 
 class Categorical(dist.Categorical):
 
-    def __init__(self, probs=None, logits=None, validate_args=None):
+    def __init__(self, probs=None, logits=None, validate_args=None, init=True):
 
         if (probs is None) == (logits is None):
             raise ValueError("Either `probs` or `logits` must be specified, but not both.")
@@ -93,7 +97,7 @@ class Categorical(dist.Categorical):
         """Return a list of parameters for the distribution"""
         return [self.logits]
 
-    def make_copy_with_grads(self):
+    def make_copy_with_grads(self, init=True):
         """
         Return a copy  of the distribution, with parameters that require_grad
         """
@@ -102,7 +106,7 @@ class Categorical(dist.Categorical):
 
         return Categorical(logits = logits)
 
-    def Set_Parameters(self, ps):
+    def Set_Parameters(self, ps, init=True):
         logits = [p.clone().detach().requires_grad_() for p in ps][0]
 
         return Categorical(logits=logits)
@@ -110,7 +114,7 @@ class Categorical(dist.Categorical):
 
 class Dirichlet(dist.Dirichlet):
 
-    def __init__(self, concentration):
+    def __init__(self, concentration, init=True):
         #NOTE: logits automatically get added
         super().__init__(concentration)
 
@@ -118,7 +122,7 @@ class Dirichlet(dist.Dirichlet):
         """Return a list of parameters for the distribution"""
         return [self.concentration]
 
-    def make_copy_with_grads(self):
+    def make_copy_with_grads(self, init=True):
         """
         Return a copy  of the distribution, with parameters that require_grad
         """
@@ -127,27 +131,29 @@ class Dirichlet(dist.Dirichlet):
 
         return Dirichlet(concentration)
 
-    def Set_Parameters(self, ps):
+    def Set_Parameters(self, ps, init=True):
         concentration = [p.clone().detach().requires_grad_() for p in ps][0]
 
         return Categorical(logits=concentration)
 
 class Gamma(dist.Gamma):
 
-    def __init__(self, concentration, rate):
-        if rate > 20.:
-            self.optim_rate = rate.clone().detach().requires_grad_()
+    def __init__(self, concentration, rate, init=True):
+        if init:
+            if rate > 20.:
+                self.optim_rate = rate.clone().detach().requires_grad_()
+            else:
+                self.optim_rate = torch.log(torch.exp(rate) - 1).clone().detach().requires_grad_()
+            super().__init__(concentration, torch.nn.functional.softplus(self.optim_rate))
         else:
-            self.optim_rate = torch.log(torch.exp(rate) - 1).clone().detach().requires_grad_()
-
-
-        super().__init__(concentration, torch.nn.functional.softplus(self.optim_rate))
+            self.optim_rate = rate.clone().detach().requires_grad_()
+            super().__init__(loc, torch.nn.functional.softplus(self.optim_rate))
 
     def Parameters(self):
         """Return a list of parameters for the distribution"""
         return [self.concentration, self.optim_rate]
 
-    def make_copy_with_grads(self):
+    def make_copy_with_grads(self, init=True):
         """
         Return a copy  of the distribution, with parameters that require_grad
         """
@@ -162,7 +168,7 @@ class Gamma(dist.Gamma):
 
         return super().log_prob(x)
 
-    def Set_Parameters(self, ps):
+    def Set_Parameters(self, ps, init=True):
         concentration, rate = [p.clone().detach().requires_grad_() for p in ps]
 
         return Gamma(concentration, rate)
@@ -177,7 +183,7 @@ if __name__ == '__main__':
     loc = torch.tensor(0.)
 
     #and some data
-    data = torch.tensor(2.)
+    data = torch.tensor([2., 3., 4.])
 
     #construct a distribution
     d = Normal(loc, scale)
@@ -188,15 +194,21 @@ if __name__ == '__main__':
     #the function .Parameters() returns a list of parameters that you can pass to an optimizer
     optimizer = torch.optim.Adam(dg.Parameters(), lr=1e-2)
 
+    print(dg)
     #do the optimization. Here we're maximizing the log_prob of some data at 2.0
     #the scale should move to 2.0 as well,
     #furthermore, the scale should be constrained to the positive reals,
     #this last thing is taken care of by the new distributions defined above
-    for i in range(1000):
-        nlp = -dg.log_prob(data)
+    for i in range(3):
+        nlp = -dg.log_prob(data[i])
         nlp.backward()
-        optimizer.step()
-        optimizer.zero_grad()
+        a= []
+        for param in dg.Parameters():
+            grad_gd = param.grad
+            a.append(grad_gd)
+        print(a)
+        #optimizer.step()
+        #optimizer.zero_grad()
 
     #check the result is correct:
     print(dg.Parameters())

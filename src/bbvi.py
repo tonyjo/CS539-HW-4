@@ -16,7 +16,7 @@ from primitives import _put, _remove, _append, _get
 from primitives import _squareroot, _mat_repmat, _mat_transpose
 # Dist
 from distributions import Normal, Bernoulli, Categorical, Dirichlet, Gamma
-
+#torch.autograd.set_detect_anomaly(True)
 # OPS
 basic_ops = {'+':torch.add,
              '-':torch.sub,
@@ -89,6 +89,7 @@ def eval_vertex(node, sig={}, l={}, Y={}, P={}):
         print('PMF for Node: ', lf)
         print('Empty sample Root: ', root)
         print('Empty sample Root: ', tail)
+        print('\n')
 
     if root == "sample*":
         sample_eval = ["sample", tail]
@@ -103,26 +104,47 @@ def eval_vertex(node, sig={}, l={}, Y={}, P={}):
 
         # if v not in (sig["Q"]).keys():
         #     sig["Q"][v] = sampler
+        # import pdb; pdb.set_trace()
         try:
-            c = (sig["Q"][node]).sample()
-        except:
-            # For some reason if it is not a sampler object
-            raise AssertionError('Failed to sample!')
-
-        try:
+            sig_Q_v_new = (sig["Q"][node]).make_copy_with_grads(init=False)
+            try:
+                c = sig_Q_v_new.sample()
+            except:
+                # For some reason if it is not a sampler object
+                raise AssertionError('Failed to sample!')
             if DEBUG:
                 print('Current Root:', node)
-                print('Current Sig: ', sig["Q"])
-            sig_Q_v = sig["Q"][node]
-            sig_Q_v = sig_Q_v.make_copy_with_grads()
-            sig["G"][node] = sig_Q_v
+                print('Current Sig: ', sig_Q_v_new)
+                print('Current Sample C: ', c)
+                print('\n')
+            nlp = -sig_Q_v_new.log_prob(c)
+            nlp.backward()
+            grad_GD = torch.zeros(0, dtype=torch.float32)
+            for param in sig_Q_v_new.Parameters():
+                grad_gd = param.grad.clone()
+                # Check if not torch tensor
+                if not torch.is_tensor(grad_gd):
+                    if isinstance(grad_gd, list):
+                        grad_gd = torch.tensor(grad_gd, dtype=torch.float32)
+                    else:
+                        grad_gd = torch.tensor([grad_gd], dtype=torch.float32)
+                # Check for 0 dimensional tensor
+                elif grad_gd.shape == torch.Size([]):
+                    grad_gd = torch.tensor([grad_gd.item()], dtype=torch.float32)
+                # Concat
+                try:
+                    grad_GD = torch.cat((grad_GD, grad_gd))
+                except:
+                    raise AssertionError('Cannot append the torch tensors')
             if DEBUG:
-                print('Current Root:', sig["G"][node])
+                print("grad_GD: ", grad_GD)
+                print('\n')
+            sig["G"][node] = grad_GD.clone().detach()
         except:
             # Its not a needed Q variable
             return [c, sig]
 
-        logWv = sampler.log_prob(p) - (sig["G"][node]).log_prob(c)
+        logWv = sampler.log_prob(c) - (sig_Q_v_new).log_prob(c)
         try:
             if "logW" in sig.keys():
                 sig["logW"] += logWv
@@ -162,8 +184,6 @@ def eval_vertex(node, sig={}, l={}, Y={}, P={}):
 
 
 # Global vars
-global rho
-rho = {}
 DEBUG = False # Set to true to see intermediate outputs for debugging purposes
 def eval_graph(graph, sigma={}, l={}):
     """
@@ -178,20 +198,6 @@ def eval_graph(graph, sigma={}, l={}):
     A = G['A']
     P = G['P']
     Y = G['Y']
-
-    # Find the link nodes aka nodes not in V
-    adj_list = []
-    for a in A.keys():
-        links = A[a]
-        for link in links:
-            adj_list.append((a, link))
-    # if DEBUG:
-    #     print("Created Adjacency list: ", adj_list)
-
-    # Create Graph
-    G_ = {}
-    for (n1, n2) in adj_list:
-        G_ = make_link(G=G_, node1=n1, node2=n2)
 
     # Test
     # E = "observe8"
@@ -432,11 +438,14 @@ def optimizer_step(g_, Q, lr=0.0001):
 
 
 def elbo_gradients(G_1toL , logW_1toL, Q, L, eps=0.00001):
+    # import pdb; pdb.set_trace()
     G_all = []
     for i in range(L):
         G_all.extend(G_1toL[i])
     G_all = set(G_all)
     if DEBUG:
+        print("G_1toL: ", G_1toL)
+        print("logW1L: ", logW_1toL)
         print("G_all: ", G_all)
 
     F  = {}
@@ -446,11 +455,7 @@ def elbo_gradients(G_1toL , logW_1toL, Q, L, eps=0.00001):
             if v in G_1toL[l]:
                 if l not in F.keys():
                     F[l] = {}
-                try:
-                    # If sample object
-                    F[l][v] = G_1toL[l][v].sample() * logW_1toL[l]
-                except:
-                    F[l][v] = G_1toL[l][v] * logW_1toL[l]
+                F[l][v] = G_1toL[l][v] * logW_1toL[l]
             else:
                 if l not in F.keys():
                     F[l] = {}
@@ -464,11 +469,9 @@ def elbo_gradients(G_1toL , logW_1toL, Q, L, eps=0.00001):
             flv = flv.detach()
             flv.requires_grad = False
             Flv.append(flv.cpu().numpy())
-            try:
-                # If sample object
-                g1L = G_1toL[l][v].sample()
-            except:
-                g1L = G_1toL[l][v]
+            g1L = G_1toL[l][v].detach()
+            g1L.requires_grad = False
+            g1L = g1L.cpu().numpy()
             G1L.append(g1L)
         Flv = np.array(Flv)
         if len(Flv.shape) < 2:
@@ -476,18 +479,28 @@ def elbo_gradients(G_1toL , logW_1toL, Q, L, eps=0.00001):
         G1L = np.array(G1L)
         if len(G1L.shape) < 2:
             G1L = np.expand_dims(G1L, axis=1)
-
         if DEBUG:
             print("Flv: \n", Flv)
             print("G1L: \n", G1L)
-            print("Conv: \n", np.cov(Flv.T, G1L.T))
+
+        #Flv = Flv.flatten('F')
+        #G1L = G1L.flatten('F')
+        if DEBUG:
+            print("Flv: \n", Flv)
+            print("G1L: \n", G1L)
+            print("Conv: \n", np.cov(Flv, G1L))
             print('Sum_GIL: ', np.sum(G1L))
             print('\n')
 
-        dm = np.sum(np.var(G1L))
-        if dm < eps:
-            dm = eps
-        b_ = np.sum(np.cov(Flv.T, G1L.T))/dm
+        num = np.sum(np.cov(Flv.T, G1L.T))
+        den = np.sum(np.var(G1L))
+        if den == 0. or den != den: # catch nan
+            b_ = 0.
+        elif abs(den) < 0.0001:
+            den = 0.0001
+        else:
+            b_ = num/den
+
         g_[v] = np.sum(Flv - (b_ * G1L))/L
 
     return g_
@@ -505,17 +518,16 @@ def BBVI(graph, Q, S, L, T, display_T=10):
         G_tL = []
         logW_tL = []
         for l in range(L):
-            r_tl, sigma_tl = eval_graph(graph=graph, sigma={**sigma}, l={})
-            G_tL.append(sigma_tl["G"])
+            # import pdb; pdb.set_trace()
+            r_tl, sigma_tl = eval_graph(graph=graph, sigma=sigma, l={})
+            G_tL.append({**sigma_tl["G"]})
             logW_tL.append(sigma_tl["logW"])
             R_tL.append([r_tl, sigma_tl["logW"]])
         # import pdb; pdb.set_trace()
-        # print(G_tL)
-        # print(logW_tL)
-        # auto_elbo_gradients(G_1toL=G_tL, logW_1toL=logW_tL, Q=Q, L=L)
         g_ = elbo_gradients(G_1toL=G_tL, logW_1toL=logW_tL, Q={**Q}, L=L)
-        Q  = optimizer_step(g_=g_, Q=Q)
-        # print(Q)
+        Q  = optimizer_step(g_={**g_}, Q=Q)
+        # Update Q
+        sigma["Q"] = {**Q}
         # Collect
         outputs.extend(R_tL)
         # Display
@@ -530,7 +542,7 @@ if __name__ == '__main__':
     # Change the path
     program_path = '/home/tonyjo/Documents/prob-prog/CS539-HW-4'
 
-    for i in range(1,2):
+    for i in range(5,6):
     #for i in range(1,6):
         ## Note: this path should be with respect to the daphne path!
         # ast = daphne(['graph', '-i', f'{program_path}/src/programs/{i}.daphne'])
@@ -547,24 +559,24 @@ if __name__ == '__main__':
         # print('\n\n\nSample of posterior of program {}:'.format(i))
 
         if i == 1:
-            print('Running graph-based-sampling for Task number {}:'.format(str(i)))
+            print('Running BBVI for Task number {}:'.format(str(i)))
             graph_path = f'./jsons/graphs/final/{i}.json'
             with open(graph_path) as json_file:
                 graph = json.load(json_file)
 
             # Setup proposal -- same as the prior distribution
             Q = {}
-            loc   = torch.tensor([0.])
-            scale = torch.tensor([math.sqrt(5)])
+            loc   = torch.tensor(0.0)
+            scale = torch.tensor(5.0)
             V = graph[1]["V"]
             for v in V:
-                Q[v] = Normal(loc, scale)
+                Q[v] = Normal(loc, scale).make_copy_with_grads()
 
             # Setup up
             # Print
-            T  = 100
-            L  = 10
-            DT = 10
+            T  = 1000
+            L  = 5
+            DT = 100
             outputs = BBVI(graph=graph, Q=Q, S=1, L=L, T=T, display_T=DT)
 
             # Mean:
@@ -609,9 +621,9 @@ if __name__ == '__main__':
                     if isinstance(x1, list):
                         x1 = x1[0]
                     try:
-                        joint_log_prob += x1
+                        joint_log_prob += -x1
                     except:
-                        joint_log_prob += x1[0]
+                        joint_log_prob += -x1[0]
                 jp.append(joint_log_prob)
 
             plt.plot(jp)
@@ -633,18 +645,18 @@ if __name__ == '__main__':
                 if v in 'sample1':
                     loc_1   = torch.tensor([0.])
                     scale_1 = torch.tensor([10.])
-                    Q[v] = Normal(loc_1, scale_1)
+                    Q[v] = Normal(loc_1, scale_1).make_copy_with_grads()
                 elif v in 'sample2':
                     loc_2   = torch.tensor([0.])
                     scale_2 = torch.tensor([10.])
-                    Q[v] = Normal(loc_2, scale_2)
+                    Q[v] = Normal(loc_2, scale_2).make_copy_with_grads()
                 else:
-                    Q[v] = Normal(loc, scale)
+                    Q[v] = Normal(loc, scale).make_copy_with_grads()
 
             # Setup up
             # Print
-            T  = 10
-            L  = 2
+            T  = 10000
+            L  = 5
             DT = 100
             all_output = BBVI(graph=graph, Q=Q, S=1, L=L, T=T, display_T=DT)
 
@@ -719,7 +731,7 @@ if __name__ == '__main__':
 
             # Setup up
             # Print
-            T  = 100
+            T  = 1000
             L  = 5
             DT = 100
             all_output = BBVI(graph=graph, Q=Q, S=1, L=L, T=T, display_T=DT)
@@ -776,8 +788,8 @@ if __name__ == '__main__':
 
             # Setup up
             # Print
-            T  = 2
-            L  = 2
+            T  = 1000
+            L  = 5
             DT = 100
             all_output = BBVI(graph=graph, Q=Q, S=1, L=L, T=T, display_T=DT)
 
