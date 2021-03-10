@@ -542,8 +542,8 @@ if __name__ == '__main__':
     # Change the path
     program_path = '/home/tonyjo/Documents/prob-prog/CS539-HW-4'
 
-    for i in range(5,6):
-    #for i in range(1,6):
+    #for i in range(5,6):
+    for i in range(1,6):
         ## Note: this path should be with respect to the daphne path!
         # ast = daphne(['graph', '-i', f'{program_path}/src/programs/{i}.daphne'])
         # ast_path = f'./jsons/graphs/final/{i}.json'
